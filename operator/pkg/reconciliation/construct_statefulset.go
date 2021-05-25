@@ -187,7 +187,7 @@ func newStatefulSetForCassandraDatacenterHelper(
 				MatchLabels: statefulSetSelectorLabels,
 			},
 			Replicas:             &replicaCountInt32,
-			ServiceName:          dc.GetAllPodsServiceName(),
+			ServiceName:          dc.GetDatacenterServiceName(),
 			PodManagementPolicy:  appsv1.ParallelPodManagement,
 			Template:             *template,
 			VolumeClaimTemplates: volumeClaimTemplates,
