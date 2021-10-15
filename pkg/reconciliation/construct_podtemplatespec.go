@@ -231,7 +231,35 @@ func addVolumes(dc *api.CassandraDatacenter, baseTemplate *corev1.PodTemplateSpe
 		},
 	}
 
-	volumeDefaults := []corev1.Volume{vServerConfig, vServerLogs, vServerEncryption}
+	cassandraConfig := corev1.Volume{
+		Name: "cassandra-config",
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		},
+	}
+
+	cassandraHome := corev1.Volume{
+		Name: "cassandra-home",
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		},
+	}
+
+	metricsCollectorConfig := corev1.Volume{
+		Name: "mcac",
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		},
+	}
+
+	tmp := corev1.Volume{
+		Name: "cassandra-tmp",
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		},
+	}
+
+	volumeDefaults := []corev1.Volume{vServerConfig, vServerLogs, vServerEncryption, cassandraConfig, cassandraHome, metricsCollectorConfig, tmp}
 
 	volumeDefaults = combineVolumeSlices(
 		volumeDefaults, baseTemplate.Spec.Volumes)
@@ -258,6 +286,29 @@ func symmetricDifference(list1 []corev1.Volume, list2 []corev1.Volume) []corev1.
 
 // This ensure that the server-config-builder init container is properly configured.
 func buildInitContainers(dc *api.CassandraDatacenter, rackName string, baseTemplate *corev1.PodTemplateSpec) error {
+
+	cassandraImage, err := images.GetCassandraImage(dc.Spec.ServerType, dc.Spec.ServerVersion)
+	if err != nil {
+		return err
+	}
+
+	baseCfg := &corev1.Container{
+		Name: "base-config-init",
+		Image: cassandraImage,
+		ImagePullPolicy: images.GetImageConfig().ImagePullPolicy,
+		Command: []string{"/bin/sh"},
+		Args: []string{"-c", "cp -r /etc/cassandra/* /cassandra-base-config/ && cp -r /opt/cassandra/* /cassandra"},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name: "cassandra-config",
+				MountPath: "/cassandra-base-config",
+			},
+			{
+				Name: "cassandra-home",
+				MountPath: "/cassandra",
+			},
+		},
+	}
 
 	serverCfg := &corev1.Container{}
 	foundOverrides := false
@@ -326,7 +377,7 @@ func buildInitContainers(dc *api.CassandraDatacenter, rackName string, baseTempl
 	if !foundOverrides {
 		// Note that append makes a copy, so we must do this after
 		// serverCfg has been properly set up.
-		baseTemplate.Spec.InitContainers = append(baseTemplate.Spec.InitContainers, *serverCfg)
+		baseTemplate.Spec.InitContainers = append(baseTemplate.Spec.InitContainers, *baseCfg, *serverCfg)
 	}
 
 	return nil
@@ -453,6 +504,7 @@ func buildContainers(dc *api.CassandraDatacenter, baseTemplate *corev1.PodTempla
 		{Name: "MGMT_API_EXPLICIT_START", Value: "true"},
 		// TODO remove this post 1.0
 		{Name: "DSE_MGMT_EXPLICIT_START", Value: "true"},
+		//{Name: "MCAC_PATH", Value: "/mcac"},
 	}
 
 	if dc.Spec.ServerType == "dse" && dc.Spec.DseWorkloads != nil {
@@ -486,6 +538,14 @@ func buildContainers(dc *api.CassandraDatacenter, baseTemplate *corev1.PodTempla
 		MountPath: "/var/log/cassandra",
 	}
 
+	cassandraCfgMount := corev1.VolumeMount{Name: "cassandra-config", MountPath: "/etc/cassandra"}
+	volumeDefaults = append(volumeDefaults, cassandraCfgMount)
+
+	volumeDefaults = append(volumeDefaults, corev1.VolumeMount{
+		Name: "cassandra-home",
+		MountPath: "/opt/cassandra",
+	})
+
 	volumeMounts := combineVolumeMountSlices(volumeDefaults,
 		[]corev1.VolumeMount{
 			cassServerLogsMount,
@@ -496,6 +556,14 @@ func buildContainers(dc *api.CassandraDatacenter, baseTemplate *corev1.PodTempla
 			{
 				Name:      "encryption-cred-storage",
 				MountPath: "/etc/encryption/",
+			},
+			{
+				Name: "mcac",
+				MountPath: "/opt/metrics-collector",
+			},
+			{
+				Name: "cassandra-tmp",
+				MountPath: "/tmp",
 			},
 		})
 
